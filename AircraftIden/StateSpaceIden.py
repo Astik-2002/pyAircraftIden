@@ -349,7 +349,7 @@ class StateSpaceIdenSIMO(object):
         fig, axs = self.fig, self.axs
         fig.set_size_inches(15, 7)
         #fig.canvas.set_window_title('FreqRes vs est')
-        fig.tight_layout()
+        #fig.tight_layout()
         fig.subplots_adjust(right=0.9)
         Hest = copy.deepcopy(self.Hs)
 

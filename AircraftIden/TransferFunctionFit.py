@@ -269,55 +269,83 @@ class TransferFunctionFit(object):
                 break
 
 
-    def estimate(self, omg_min=None, omg_max=None,accept_J=10):
+    def estimate(self, omg_min=None, omg_max=None, accept_J=10):
         self.init_omg_list(omg_min, omg_max)
 
         J_min_max = 1000000
         J_min = J_min_max
 
-        cpu_use = multiprocessing.cpu_count() - 1
-        if cpu_use < 2:
-            cpu_use = 2
-        pool = multiprocessing.Pool(cpu_use)
+        if self.iter_times == 1:
+            # Single iteration, no multiprocessing
+            x0 = self.setup_initvals()
+            for i in range(200):
+                print("iter : ",i+1)
+                x_tmp,J = self.solve(init_val=x0)
+                if J < J_min:
+                    diff_j = J_min - J
+                    diff_x = x0 - x_tmp
+                    J_min = J
+                    random_bound = 0.05  # Set the bound for the random changes
+                    random_array = np.random.uniform(-random_bound, random_bound)
+                    #x0 = x_tmp + random_array
+                    x0 = x_tmp
+                    self.x = x_tmp
+                    self.setup_transferfunc(x_tmp)
+                    print("Found better solution {}".format(J))
+                else:
+                    x0 = self.setup_initvals()
 
-        results = []
-        for i in range(self.iter_times):
-            result = pool.apply_async(self.solve)
-            results.append(result)
+                if J < accept_J:
+                    return self.tf
+            
+            return self.tf
+        else:
+            # Multiple iterations, use multiprocessing
+            cpu_use = multiprocessing.cpu_count() - 1
+            if cpu_use < 2:
+                cpu_use = 2
+            pool = multiprocessing.Pool(cpu_use)
 
-        should_exit_pool = False
-        print("Starting Estimate",end="")
-        try:
-            while not should_exit_pool:
-                if results.__len__() == 0:
-                    print("All in pool finish")
-                    break
-                for i in range(results.__len__()):
-                    thr = results[i]
-                    if thr.ready() and thr.successful():
-                        x_tmp,J  = thr.get()
-                        if J < J_min:
-                            J_min = J
-                            self.x = x_tmp
-                            self.setup_transferfunc(x_tmp)
-                            print("\r",end="")
-                            print("Found new better {}".format(J), end="")
+            results = []
+            for i in range(self.iter_times):
+                result = pool.apply_async(self.solve)
+                results.append(result)
 
-                        if J < accept_J:
-                            print("")
-                            pool.terminate()
-                            return self.tf
-
-                        del results[i]
+            should_exit_pool = False
+            print("Starting Estimate", end="")
+            try:
+                while not should_exit_pool:
+                    if len(results) == 0:
+                        print("All in pool finish")
                         break
-                time.sleep(0.01)
-            pool.terminate()
-        except KeyboardInterrupt:
-            print("KeyboardInterrupt, exit thread pools")
-            pool.terminate()
-            pool.join()
-            raise
-        return self.tf
+                    for i in range(len(results)):
+                        thr = results[i]
+                        if thr.ready() and thr.successful():
+                            x_tmp, J = thr.get()
+                            if J < J_min:
+                                J_min = J
+                                self.x = x_tmp
+                                self.setup_transferfunc(x_tmp)
+                                print("\r", end="")
+                                print("Found new better {}".format(J), end="")
+
+                            if J < accept_J:
+                                print("")
+                                pool.terminate()
+                                return self.tf
+
+                            del results[i]
+                            break
+                    time.sleep(0.01)
+                pool.terminate()
+            except KeyboardInterrupt:
+                print("KeyboardInterrupt, exit thread pools")
+                pool.terminate()
+                pool.join()
+                raise
+
+            return self.tf
+
 
     def setup_transferfunc(self, x):
         self.tf = self.get_transfer_function_by_x(x)
@@ -325,6 +353,19 @@ class TransferFunctionFit(object):
     def solve(self):
         f = self.cost_func
         x0 = self.setup_initvals()
+        bounds = [(None, None) for i in range(len(x0))]
+        bounds[-1] = (0, 0.1)
+        ret = minimize(f, x0, options={'maxiter': 100, 'disp': False}, bounds=bounds, tol=1e-15)
+        x = ret.x.copy()# / ret.x[self.den_max_ord_ptr]
+        J = ret.fun
+        return x, J
+
+    def solve(self, init_val = None):
+        f = self.cost_func
+        if init_val is not None:
+            x0 = init_val
+        else:
+            x0 = self.setup_initvals()
         bounds = [(None, None) for i in range(len(x0))]
         bounds[-1] = (0, 0.1)
         ret = minimize(f, x0, options={'maxiter': 100, 'disp': False}, bounds=bounds, tol=1e-15)
