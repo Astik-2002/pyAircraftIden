@@ -278,7 +278,7 @@ class TransferFunctionFit(object):
         if self.iter_times == 1:
             # Single iteration, no multiprocessing
             x0 = self.setup_initvals()
-            for i in range(200):
+            for i in range(100):
                 print("iter : ",i+1)
                 x_tmp,J = self.solve(init_val=x0)
                 if J < J_min:
