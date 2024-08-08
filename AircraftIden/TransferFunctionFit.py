@@ -2,13 +2,13 @@ import math
 import numpy as np
 from AircraftIden import FreqIdenSIMO
 import matplotlib.pyplot as plt
-from scipy.optimize import minimize, basinhopping
+from scipy.optimize import minimize
 import scipy.signal as signal
+from scipy.signal import butter,filtfilt
 import time
 import sympy as sp
 from sympy import poly, latex
 import multiprocessing
-import random
 from numpy import linalg as LA
 import numbers
 
@@ -58,7 +58,7 @@ class TransferFunctionModel(object):
         self.tau = tau
 
         pass
-    
+
     def freqres(self, w, unwarp = False):
         
         b = self.num
@@ -76,7 +76,30 @@ class TransferFunctionModel(object):
         else:
             pha = np.arctan2(h.imag, h.real) * 180 / math.pi
         return amp, pha
-    
+    #### TODO ####    
+    # def jacobian_tf(self, w, unwarp = False):
+    #     b = self.num
+    #     a = self.den
+    #     tau = self.tau
+    #     print("denominator: ",a)
+    #     print("numerator: ",b)
+    #     print("tau: ",tau)
+    #     s = 1j * w
+    #     # print(s)
+    #     # print(type(tau))
+    #     h = np.polyval(b, s) * np.exp(-tau * s) / np.polyval(a, s)
+    #     print(h)
+    #     # print(np.absolute(h))
+    #     h = np.complex64(h)
+    #     amp = 20 * np.log10(np.absolute(h))
+    #     if unwarp:
+    #         pha = np.unwrap(np.arctan2(h.imag, h.real)) * 180 / math.pi
+    #     else:
+    #         pha = np.arctan2(h.imag, h.real) * 180 / math.pi
+    #     Jacobian_amplitude = sp.Matrix([amp]).jacobian(self.params)
+    #     Jacobian_phase = sp.Matrix([pha]).jacobian(self.params)
+    #     return Jacobian_amplitude, Jacobian_phase
+
     def coeff(self):
         num = self.num
         den = self.den
@@ -149,9 +172,41 @@ class TransferFunctionParamModel(object):
 
         if not isinstance(self.tau, numbers.Number):
             syms.update(self.tau.atoms(sp.Symbol))
-
         syms.remove(self.s)
         return list(syms)
+
+    def get_unknown_param_list_ordered(self):
+        def extract_coefficients(expr, s):
+            poly_expr = sp.Poly(expr, s)
+            coeffs = [poly_expr.coeff_monomial(s**i) for i in range(poly_expr.degree(s), -1, -1)]
+            return coeffs
+
+        num_coeffs = extract_coefficients(self.num, self.s)
+        den_coeffs = extract_coefficients(self.den, self.s)
+
+        syms = []
+        for coeff in num_coeffs + den_coeffs:
+            if isinstance(coeff, sp.Symbol):
+                syms.append(coeff)
+            else:
+                syms.extend(coeff.free_symbols)
+
+        if isinstance(self.tau, sp.Symbol):
+            syms.append(self.tau)
+        else:
+            syms.extend(self.tau.free_symbols)
+
+        syms = list(set(syms))
+        ordered_syms = []
+        for coeff in den_coeffs + num_coeffs:
+            if isinstance(coeff, sp.Symbol):
+                ordered_syms.append(coeff)
+            else:
+                ordered_syms.extend([sym for sym in coeff.free_symbols if sym in syms])
+        if self.tau in syms:
+            ordered_syms.append(self.tau)
+
+        return ordered_syms
 
     def symbol_expr(self):
         return self.num / self.den * sp.exp(-self.tau)
@@ -176,7 +231,7 @@ class TransferFunctionFit(object):
         self.iter_times = iter_times
 
         self.tfpm = tfpm
-        self.unknown_param_list = self.tfpm.get_unknown_param_list()
+        self.unknown_param_list = self.tfpm.get_unknown_param_list_ordered()
         print("Uknown number {} {}".format(len(self.unknown_param_list),self.unknown_param_list))
 
         self.tau_index = None
@@ -234,6 +289,26 @@ class TransferFunctionFit(object):
         wgamma = 1.58 * (1 - math.exp(-gama2 * gama2))
         wgamma = wgamma * wgamma
         return J * wgamma
+    #### TODO ####
+    # def cost_func_gradient_at_omg_ptr(self, tf, omg_ptr):
+    #     omg = self.source_freq[omg_ptr]
+    #     amp, pha = tf.freqres(omg)
+    #     d_amp, d_pha = tf.jacobian_tf(omg)
+    #     h = self.source_H[omg_ptr]
+    #     h_amp = 20 * np.log10(np.absolute(h))
+    #     h_pha = np.arctan2(h.imag, h.real) * 180 / math.pi
+    #     pha_err = h_pha - pha
+    #     if pha_err > 180:
+    #         pha_err = pha_err - 360
+    #     if pha_err < -180:
+    #         pha_err = pha_err + 360
+    #     d_J = 2*self.wg*((h_amp-amp)*(-1*d_amp)) + 2*self.wp*pha_err*(-1*d_pha)
+    #     gama2 = self.source_coheren[omg_ptr]
+
+    #     wgamma = 1.58 * (1 - math.exp(-gama2 * gama2))
+    #     wgamma = wgamma * wgamma
+    #     d_J = d_J*wgamma
+    #     return d_J
 
     def cost_func(self, x):
         tf = self.get_transfer_function_by_x(x)
@@ -241,6 +316,26 @@ class TransferFunctionFit(object):
         arr_func = np.vectorize(cost_func_at_omg)
         cost_arr = arr_func(self.est_omg_ptr_list)
         return np.sum(cost_arr) * 20 / self.nw + self.reg * LA.norm(x)
+
+    #### TODO ####    
+    # def compute_gradient(self, x):
+    #     tf = self.get_transfer_function_by_x(x)
+    #     total_gradient = np.zeros((1, len(x)))
+
+        
+    #     for omg_ptr in self.est_omg_ptr_list:
+    #         gradient_at_omg = self.cost_func_gradient_at_omg_ptr(tf, omg_ptr)
+    #         total_gradient += gradient_at_omg
+        
+
+    #     norm_x = LA.norm(x)
+    #     if norm_x != 0:
+    #         reg_term = (self.reg * x / norm_x).reshape(1, -1)
+    #         total_gradient += reg_term
+        
+        
+    #     return total_gradient
+
 
     def init_omg_list(self, omg_min, omg_max):
         if omg_min is None:
@@ -269,7 +364,7 @@ class TransferFunctionFit(object):
                 break
 
 
-    def estimate(self, omg_min=None, omg_max=None, accept_J=10):
+    def estimate(self, omg_min=None, omg_max=None, accept_J=10, init_val = None):
         self.init_omg_list(omg_min, omg_max)
 
         J_min_max = 1000000
@@ -277,24 +372,42 @@ class TransferFunctionFit(object):
 
         if self.iter_times == 1:
             # Single iteration, no multiprocessing
-            x0 = self.setup_initvals()
+            if init_val == None:
+                x0 = self.setup_initvals()
+            else:
+                x0 = init_val
+            G_prev = np.zeros((len(x0)))
+            x_prev = x0
             for i in range(100):
                 print("iter : ",i+1)
-                x_tmp,J = self.solve(init_val=x0)
+                x_tmp,J, G = self.solve_singleit(init_val=x0)
                 if J < J_min:
-                    diff_j = J_min - J
-                    diff_x = x0 - x_tmp
                     J_min = J
-                    random_bound = 0.05  # Set the bound for the random changes
-                    random_array = np.random.uniform(-random_bound, random_bound)
-                    #x0 = x_tmp + random_array
-                    x0 = x_tmp
+                    if np.any(G == G_prev):
+                        update = G
+                    else:
+                        update = G*(x_tmp - x_prev)/(G-G_prev)
+                    x0 = x_tmp - 0.01*update #learning rate of 0.000005
                     self.x = x_tmp
+                    x_prev = x_tmp
+                    G_prev = G
                     self.setup_transferfunc(x_tmp)
                     print("Found better solution {}".format(J))
                 else:
-                    x0 = self.setup_initvals()
+                    print("Solution {}".format(J))
+                    if J < 1.5*J_min:
+                        if np.any(G == G_prev):
+                            update = G
+                        else:
+                            update = G*(x_tmp - x_prev)/(G-G_prev)
 
+                        x0 = self.x - 0.01*update #learning rate of 0.000005
+                        x_prev = x_tmp
+                        G_prev = G
+                    
+                    else:
+                        for i in range(len(self.x)):
+                            x0[i] = self.x[i] + np.random.uniform(low=0, high= 0.1)
                 if J < accept_J:
                     return self.tf
             
@@ -360,18 +473,21 @@ class TransferFunctionFit(object):
         J = ret.fun
         return x, J
 
-    def solve(self, init_val = None):
+    def solve_singleit(self, init_val = None):
         f = self.cost_func
         if init_val is not None:
             x0 = init_val
         else:
             x0 = self.setup_initvals()
+        
+        print(x0)
         bounds = [(None, None) for i in range(len(x0))]
         bounds[-1] = (0, 0.1)
-        ret = minimize(f, x0, options={'maxiter': 100, 'disp': False}, bounds=bounds, tol=1e-15)
+        ret = minimize(f, x0, method='L-BFGS-B',options={'maxiter': 100, 'disp': False}, bounds=bounds, tol=1e-15)
         x = ret.x.copy()# / ret.x[self.den_max_ord_ptr]
         J = ret.fun
-        return x, J
+        G = ret.jac
+        return x, J, G
 
     def setup_initvals(self):
         x0 = np.random.rand(len(self.unknown_param_list)) - 0.5
@@ -379,6 +495,94 @@ class TransferFunctionFit(object):
         if self.tau_index != None:
             x0[self.tau_index] = 0
         return x0
+    
+    def butter_lowpass(self,cutoff, fs, order=5):
+        """
+        Design a Butterworth low-pass filter.
+
+        Parameters:
+        cutoff (float): The cutoff frequency of the filter.
+        fs (float): The sampling frequency of the signal.
+        order (int): The order of the filter.
+
+        Returns:
+        b, a (ndarray, ndarray): Numerator (b) and denominator (a) coefficients of the filter.
+        """
+        nyquist = 0.5 * fs
+        normal_cutoff = cutoff / nyquist
+        b, a = butter(order, normal_cutoff, btype='low', analog=False)
+        return b, a
+
+    def apply_lowpass_filter(self,data, cutoff, fs, order=5):
+        """
+        Apply a low-pass filter to a signal.
+
+        Parameters:
+        data (ndarray): The input signal.
+        cutoff (float): The cutoff frequency of the filter.
+        fs (float): The sampling frequency of the signal.
+        order (int): The order of the filter.
+
+        Returns:
+        y (ndarray): The filtered signal.
+        """
+        b, a = self.butter_lowpass(cutoff, fs, order=order)
+        y = filtfilt(b, a, data)
+        return y
+
+    # Numerical differentiation
+    def numerical_diff(self, data, dt, order):
+        di = data
+        if order == 0:
+            return data
+        for i in range(order):
+            di = np.gradient(di,dt)
+        return di
+    
+    def setup_initvals_ARX(self,num, den, u, y, cutoff, dt):
+        s = sp.symbols('s')
+        num_s = sp.Poly(num,s)
+        den_s = sp.Poly(den,s)
+        order_num = sp.degree(num_s, s)
+        order_den = sp.degree(den_s, s)
+        num_dict = num_s.as_dict()
+        den_dict = den_s.as_dict()
+            
+        z0 = self.apply_lowpass_filter(y, cutoff, 1/dt)
+        zi = z0
+        w0 = self.apply_lowpass_filter(u, cutoff, 1/dt)
+        wi = w0
+        Z = []
+        W = []
+
+        for i in range(order_den-1, 0, -1):
+            Z.append(-1 * self.numerical_diff(z0, dt, i))
+
+        Z.append(-z0)
+
+        for i in range(order_num, 0, -1):
+            Z.append(self.numerical_diff(w0, dt, i))
+        
+        Z.append(w0)
+
+        W.append(self.numerical_diff(z0, dt, order_den))
+
+        Z = np.column_stack(Z)
+        W = np.column_stack(W)
+        theta, _, _, _ = np.linalg.lstsq(Z, W, rcond=None)
+        init_vals = []
+        for vals in theta:
+            init_vals.append(vals[0]/100000)
+        n = len(init_vals)
+        for i in range(order_num+1):
+            if (i,) in num_dict:
+                continue
+            else:
+                del init_vals[n-1-i]
+        init_vals = [1.0/100000] + init_vals + [0.0]
+        print(init_vals)
+        assert len(init_vals) == len(self.unknown_param_list), "number of initial estimates must be equal to the number of params"
+        return init_vals
 
     def plot(self, name = ""):
         H = self.source_H
@@ -408,6 +612,17 @@ class TransferFunctionFit(object):
         plt.grid(which='both')
 
         pass
+    
+    def provide_plot_arrays(self):
+        H = self.source_H
+        freq = self.source_freq
+
+        mag, phase = self.tf.freqres(freq,unwarp=True)
+        h_amp, h_phase = FreqIdenSIMO.get_amp_pha_from_h(H)
+        coherence = self.source_coheren
+
+        return H, freq, mag, phase, h_amp, h_phase, coherence
+
 
 
 def siso_freq_iden():

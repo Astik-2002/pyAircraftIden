@@ -40,9 +40,9 @@ class StateSpaceIdenSIMO(object):
         self.cpu_use = cpu_use
         self.con_str = con_str
         self.iter_callback= iter_callback
-        self.param1_index = -1
-        self.param2_index = -1
-        self.is_negative = False
+        self.param1_index = []
+        self.param2_index = []
+        self.is_negative = []
     
     def print_res(self):
         assert self.x_best is not None, "You must estimate first"
@@ -54,22 +54,39 @@ class StateSpaceIdenSIMO(object):
         print(ssm.A)
         print("B")
         print(ssm.B)
-        
+    
+    def getMatrices(self):
+        assert self.x_best is not None, "You must estimate first"
+        x_syms = self.sspm.solve_params_from_newparams(self.x_best)
+        sym_sub = dict(zip(self.x_syms, self.x_best))
+        ssm = self.sspm.get_ssm_by_syms(sym_sub, using_converted=True)
+        return ssm.A, ssm.B
+    
     def user_constrain_index(self):
+        print("in constraint index function")
         if self.con_str:
-            param1 = self.con_str[0]
-            param2 = self.con_str[1]
-            self.is_negative = param2.startswith('-')
-            param2 = param2.lstrip('-')
-            try:
-                self.param1_index = self.x_syms.index(sp.symbols(param1))
-            except ValueError as e:
-                raise ValueError(f"Error: Symbol {param1} not found in self.x_syms. Cannot continue.") from e
-
-            try:
-                self.param2_index = self.x_syms.index(sp.symbols(param2))
-            except ValueError as e:
-                raise ValueError(f"Error: Symbol {param2} not found in self.x_syms. Cannot continue.") from e
+            print("in first if")
+            for constraints in self.con_str:
+                print(constraints[0], " : " ,constraints[1])
+                param1 = constraints[0]
+                param2 = constraints[1]
+                is_negative = param2.startswith('-')
+                param2 = param2.lstrip('-')
+                try:
+                    param1_index = self.x_syms.index(sp.symbols(param1))
+                    print("index 1 constraint: ",param1_index)
+                    self.param1_index.append(param1_index)
+                except ValueError as e:
+                    raise ValueError(f"Error: Symbol {param1} not found in self.x_syms. Cannot continue.") from e
+                
+                try:
+                    param2_index = self.x_syms.index(sp.Symbol(param2))
+                    print("index 2 constraint: ",param2_index)
+                    self.param2_index.append(param2_index)
+                except ValueError as e:
+                    raise ValueError(f"Error: Symbol {param2} not found in self.x_syms. Cannot continue.") from e
+                
+                self.is_negative.append(is_negative)
 
     def estimate(self, sspm: StateSpaceParamModel, syms, omg_min=None, omg_max=None, constant_defines=None, rand_init_max = 1, bounds=None):
         assert self.y_dims == sspm.y_dims, "StateSpaceModel dim : {} need to iden must have same dims with Hs {}".format(
@@ -86,7 +103,6 @@ class StateSpaceIdenSIMO(object):
         else:
             self.lower_bnd=bounds[0]
             self.upper_bnd=bounds[1]
-
         self.syms = syms
         sspm.load_constant_defines(constant_defines)
         self.x_syms = list(sspm.get_new_params())
@@ -96,10 +112,27 @@ class StateSpaceIdenSIMO(object):
         self.user_constrain_index()
 
         if self.max_sample_times > 1:
+            print("in parallel solve (estimate)")
             J, x = self.parallel_solve(sspm)
         else:
             self.sspm = sspm
-            J, x = self.solve(0)
+            J_min = 100000
+            sspm = copy.deepcopy(self.sspm)
+            x0 = self.setup_initvals(sspm)
+            for i in range(100):
+                J, x = self.solve(0, x0 = x0)
+                if J < J_min:
+                    x0 = x
+                    J_min = J
+                    self.x_best = x
+                    self.J_min = J
+                    print("Found New Better cost:", J)
+                    if J < self.accept_J:
+                        x_syms = sspm.solve_params_from_newparams(x)
+                        return self.J_min, self.get_best_ssm()
+                else:
+                    x0 = self.setup_initvals(sspm)
+                
 
         x_syms = sspm.solve_params_from_newparams(x)
         # print("J : {} syms {}".format(J, x_syms))
@@ -115,6 +148,7 @@ class StateSpaceIdenSIMO(object):
 
     def parallel_solve(self, sspm):
         self.sspm = sspm
+        print("in parallel solve")
         if self.cpu_use is None:
             cpu_use = multiprocessing.cpu_count() - 1
         else:
@@ -192,19 +226,9 @@ class StateSpaceIdenSIMO(object):
     #     return x0
     
     def setup_initvals(self,sspm):
-        print("Start setup init")
         x0 = np.zeros(self.x_dims)
-        print("before madness")
         if self.lower_bnd:
             for k in range(self.x_dims):
-                if self.con_str:
-                    if k == self.param2_index:
-                        if self.is_negative:
-                            x0[k] = -x0[self.param1_index]
-                        else:
-                            x0[k] = x0[self.param1_index]
-                        continue
-
                 lbnd = self.lower_bnd[k]
                 ubnd = self.upper_bnd[k]
                 ret = lbnd + np.random.rand()*(ubnd - lbnd)
@@ -219,17 +243,9 @@ class StateSpaceIdenSIMO(object):
                 sym_def = sspm.new_params_raw_defines[sym]
                 v = sym_def.evalf(subs=subs)
                 x0[i] = v
-                if self.con_str:
-                    if i == self.param2_index:
-                        if self.is_negative:
-                            x0[i] = -x0[self.param1_index]
-                        else:
-                            x0[i] = x0[self.param1_index]
-                        continue
-      
         return x0
                 
-    def solve(self, id=0):
+    def solve(self, id=0, x0 = None):
         sspm = copy.deepcopy(self.sspm)
         f = lambda x: self.cost_func(sspm, x)
 
@@ -238,12 +254,10 @@ class StateSpaceIdenSIMO(object):
 
         #print("{} using init {}".format(id, x0))
         sys.stdout.flush()
-
-        x0 = self.setup_initvals(sspm)
+        if x0 is None or len(x0) == 0:
+            x0 = self.setup_initvals(sspm)
         bnds = None
         bnds = []
-        print("{} using init {}".format(id, x0))            
-
         if self.lower_bnd:
             for k in range(self.lower_bnd.__len__()):
                 bnds.append((self.lower_bnd[k],self.upper_bnd[k]))
@@ -254,7 +268,6 @@ class StateSpaceIdenSIMO(object):
 
         x = ret.x.copy()
         J = ret.fun
-        print("id: {}, cost: {}".format(id,J))
         return J, x
 
 
@@ -301,27 +314,12 @@ class StateSpaceIdenSIMO(object):
     def constrain_func(self, sspm: StateSpaceParamModel, x):
         sym_sub = dict()
         assert len(x) == len(self.x_syms), 'State length must be equal with x syms'
-        # setup state x
-        # user defined constraints
-        # if self.con_str:
-        #     param1 = self.con_str[0]
-        #     param2 = self.con_str[1]
-        #     is_negative = param2.startswith('-')
-        #     param2 = param2.lstrip('-')
-        #     try:
-        #         param1_index = self.x_syms.index(sp.symbols(param1))
-        #     except ValueError as e:
-        #         raise ValueError(f"Error: Symbol {param1} not found in self.x_syms. Cannot continue.") from e
-
-        #     try:
-        #         param2_index = self.x_syms.index(sp.symbols(param2))
-        #     except ValueError as e:
-        #         raise ValueError(f"Error: Symbol {param2} not found in self.x_syms. Cannot continue.") from e
         if self.con_str:        
-            if self.is_negative:
-                x[self.param1_index] = -x[self.param2_index]
-            else:
-                x[self.param1_index] = x[self.param2_index]
+            for i in range(len(self.is_negative)):
+                if self.is_negative[i]:
+                    x[self.param1_index[i]] = -x[self.param2_index[i]]
+                else:
+                    x[self.param1_index[i]] = x[self.param2_index[i]]
 
         sym_sub = dict(zip(self.x_syms, x))
         ssm = sspm.get_ssm_by_syms(sym_sub, using_converted=True)
@@ -349,7 +347,7 @@ class StateSpaceIdenSIMO(object):
         fig, axs = self.fig, self.axs
         fig.set_size_inches(15, 7)
         #fig.canvas.set_window_title('FreqRes vs est')
-        #fig.tight_layout()
+        fig.tight_layout()
         fig.subplots_adjust(right=0.9)
         Hest = copy.deepcopy(self.Hs)
 
