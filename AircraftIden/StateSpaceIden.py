@@ -119,26 +119,46 @@ class StateSpaceIdenSIMO(object):
             J_min = 100000
             sspm = copy.deepcopy(self.sspm)
             x0 = self.setup_initvals(sspm)
-            for i in range(100):
-                J, x = self.solve(0, x0 = x0)
+            G_prev = np.zeros((len(x0)))
+            x_prev = x0
+            for i in range(10):
+                print("iter: ",i)
+                J, x_tmp, G = self.solve(0, x0 = x0)
                 if J < J_min:
-                    x0 = x
-                    J_min = J
-                    self.x_best = x
+                    # x0 = x
+                    # J_min = J
+                    # self.x_best = x
+                    # self.J_min = J
                     self.J_min = J
+                    J_min = J
+                    if np.any(G == G_prev):
+                        update = G
+                    else:
+                        update = G*(x_tmp - x_prev)/(G-G_prev)
+                    x0 = x_tmp - 0.01*update #learning rate of 0.000005
+                    self.x_best = x_tmp
+                    x_prev = x_tmp
+                    G_prev = G
                     print("Found New Better cost:", J)
                     if J < self.accept_J:
-                        x_syms = sspm.solve_params_from_newparams(x)
+                        x_syms = sspm.solve_params_from_newparams(self.x_best)
                         return self.J_min, self.get_best_ssm()
                 else:
-                    x0 = self.setup_initvals(sspm)
-                
+                    print("solution: ",J)
+                    if J < 1.5*J_min:
+                        if np.any(G == G_prev):
+                            update = G
+                        else:
+                            update = G*(x_tmp - x_prev)/(G-G_prev)
 
-        x_syms = sspm.solve_params_from_newparams(x)
-        # print("J : {} syms {}".format(J, x_syms))
+                        x0 = self.x_best - 0.01*update #learning rate of 0.000005
+                        x_prev = x_tmp
+                        G_prev = G
+                    
+                    else:
+                        x0 = self.setup_initvals(sspm)                  
 
-        self.x_best = x
-        self.J_min = J
+        x_syms = sspm.solve_params_from_newparams(self.x_best)
 
         if self.enable_debug_plot:
             self.draw_freq_res()
@@ -268,7 +288,8 @@ class StateSpaceIdenSIMO(object):
 
         x = ret.x.copy()
         J = ret.fun
-        return J, x
+        G = ret.jac
+        return J, x, G
 
 
     def cost_func(self, sspm: StateSpaceParamModel, x):
@@ -343,69 +364,55 @@ class StateSpaceIdenSIMO(object):
         if self.fig is not None:
             plt.close(self.fig)
 
+        # Create subplots with shared y-axis
         self.fig, self.axs = plt.subplots(self.y_dims, 1, sharey=True)
         fig, axs = self.fig, self.axs
         fig.set_size_inches(15, 7)
-        #fig.canvas.set_window_title('FreqRes vs est')
         fig.tight_layout()
         fig.subplots_adjust(right=0.9)
         Hest = copy.deepcopy(self.Hs)
 
         ssm = self.get_best_ssm()
 
-        for omg_ptr in range(self.freq.__len__()):
+        for omg_ptr in range(len(self.freq)):
             u_index = 0
             omg = self.freq[omg_ptr]
             Tnum = ssm.calucate_transfer_matrix_at_omg(omg)
             for y_index in range(self.y_dims):
                 h = Tnum[y_index, u_index]
-                h = complex(h)
+                h = complex(h)  # Replace np.complex with built-in complex
                 Hest[y_index][omg_ptr] = h
 
         for y_index in range(self.y_dims):
-            # trans = sspm.get_transfer_func(y_index, 0)
             amp0, pha0 = FreqIdenSIMO.get_amp_pha_from_h(self.Hs[y_index])
             amp1, pha1 = FreqIdenSIMO.get_amp_pha_from_h(Hest[y_index])
-            # amp1, pha1 = amp0, pha0
-            if y_index > 1:
-                ax1 = axs[y_index]
-            else:
-                ax1 = axs
+
+            ax1 = axs if self.y_dims == 1 else axs[y_index]  # Handle case when y_dims is 1
 
             if self.y_names is not None:
-                ax1.title.set_text(self.y_names[y_index])
+                ax1.set_title(self.y_names[y_index])
 
             p1, = ax1.semilogx(self.freq, amp0, '.', color='tab:blue', label="Hs")
             p2, = ax1.semilogx(self.freq, amp1, '', color='tab:blue', label="Hest")
             ax1.set_ylabel('db', color='tab:blue')
             ax1.grid(which="both")
 
-            if y_index > 1:
-                ax2 = axs[y_index].twinx()
-            else:
-                ax2 = axs
+            ax2 = ax1.twinx()  # Create twin y-axis for phase
 
             ax2.set_ylabel('deg', color='tab:orange')
-            ax2.tick_params('y', colors='tab:orange')
+            ax2.tick_params(axis='y', colors='tab:orange')
 
             p3, = ax2.semilogx(self.freq, pha0, '.', color='tab:orange', label="pha")
             p4, = ax2.semilogx(self.freq, pha1, color='tab:orange', label="phaest")
-            # ax2.grid(which="both")
 
-            if y_index > 1:
-                ax3 = ax1.twinx()
-            else:
-                ax3 = axs
-
-            ax3 = axs
-            # ax3.grid(which="both")
+            ax3 = ax1.twinx()  # Create another twin y-axis for coherence
+            ax3.spines["right"].set_position(("axes", 1.05))
             p5, = ax3.semilogx(self.freq, self.coherens[y_index], color='tab:gray', label="Coherence")
 
-            ax3.spines["right"].set_position(("axes", 1.05))
-            # ax2.set_ylabel('coherence', color='tab:gray')
             lines = [p1, p2, p3, p4]
-
             ax1.legend(lines, [l.get_label() for l in lines])
+
+        plt.show()
 
     def init_omg_list(self, omg_min, omg_max):
         if omg_min is None:

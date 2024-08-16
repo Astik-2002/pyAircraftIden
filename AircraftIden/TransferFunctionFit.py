@@ -4,7 +4,7 @@ from AircraftIden import FreqIdenSIMO
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 import scipy.signal as signal
-from scipy.signal import butter,filtfilt
+from scipy.signal import butter
 import time
 import sympy as sp
 from sympy import poly, latex
@@ -407,7 +407,7 @@ class TransferFunctionFit(object):
                     
                     else:
                         for i in range(len(self.x)):
-                            x0[i] = self.x[i] + np.random.uniform(low=0, high= 0.1)
+                            x0[i] = self.x[i] + np.random.uniform(low=self.x[i]/2, high= 2*self.x[i])
                 if J < accept_J:
                     return self.tf
             
@@ -496,40 +496,6 @@ class TransferFunctionFit(object):
             x0[self.tau_index] = 0
         return x0
     
-    def butter_lowpass(self,cutoff, fs, order=5):
-        """
-        Design a Butterworth low-pass filter.
-
-        Parameters:
-        cutoff (float): The cutoff frequency of the filter.
-        fs (float): The sampling frequency of the signal.
-        order (int): The order of the filter.
-
-        Returns:
-        b, a (ndarray, ndarray): Numerator (b) and denominator (a) coefficients of the filter.
-        """
-        nyquist = 0.5 * fs
-        normal_cutoff = cutoff / nyquist
-        b, a = butter(order, normal_cutoff, btype='low', analog=False)
-        return b, a
-
-    def apply_lowpass_filter(self,data, cutoff, fs, order=5):
-        """
-        Apply a low-pass filter to a signal.
-
-        Parameters:
-        data (ndarray): The input signal.
-        cutoff (float): The cutoff frequency of the filter.
-        fs (float): The sampling frequency of the signal.
-        order (int): The order of the filter.
-
-        Returns:
-        y (ndarray): The filtered signal.
-        """
-        b, a = self.butter_lowpass(cutoff, fs, order=order)
-        y = filtfilt(b, a, data)
-        return y
-
     # Numerical differentiation
     def numerical_diff(self, data, dt, order):
         di = data
@@ -539,19 +505,16 @@ class TransferFunctionFit(object):
             di = np.gradient(di,dt)
         return di
     
-    def setup_initvals_ARX(self,num, den, u, y, cutoff, dt):
+    def setup_initvals_ARX(self,num, den, u, y, dt):
         s = sp.symbols('s')
         num_s = sp.Poly(num,s)
         den_s = sp.Poly(den,s)
         order_num = sp.degree(num_s, s)
         order_den = sp.degree(den_s, s)
         num_dict = num_s.as_dict()
-        den_dict = den_s.as_dict()
             
-        z0 = self.apply_lowpass_filter(y, cutoff, 1/dt)
-        zi = z0
-        w0 = self.apply_lowpass_filter(u, cutoff, 1/dt)
-        wi = w0
+        z0 = y
+        w0 = u
         Z = []
         W = []
 
