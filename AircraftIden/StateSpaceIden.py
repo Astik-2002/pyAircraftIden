@@ -121,7 +121,7 @@ class StateSpaceIdenSIMO(object):
             x0 = self.setup_initvals(sspm)
             G_prev = np.zeros((len(x0)))
             x_prev = x0
-            for i in range(10):
+            for i in range(50):
                 print("iter: ",i)
                 J, x_tmp, G = self.solve(0, x0 = x0)
                 if J < J_min:
@@ -135,7 +135,7 @@ class StateSpaceIdenSIMO(object):
                         update = G
                     else:
                         update = G*(x_tmp - x_prev)/(G-G_prev)
-                    x0 = x_tmp - 0.01*update #learning rate of 0.000005
+                    x0 = x_tmp - 0.01*update #learning rate of 0.01
                     self.x_best = x_tmp
                     x_prev = x_tmp
                     G_prev = G
@@ -151,7 +151,7 @@ class StateSpaceIdenSIMO(object):
                         else:
                             update = G*(x_tmp - x_prev)/(G-G_prev)
 
-                        x0 = self.x_best - 0.01*update #learning rate of 0.000005
+                        x0 = x_tmp - 0.01*update #learning rate of 0.01
                         x_prev = x_tmp
                         G_prev = G
                     
@@ -227,24 +227,6 @@ class StateSpaceIdenSIMO(object):
         print(x_state)
         sys.stdout.flush()
 
-    # def initvals_w_bounds(self,lbnd,ubnd):
-    #     ret = lbnd + np.random.rand()*(ubnd - lbnd)
-    #     return ret
-
-    # def setup_initvals(self, sspm):
-    #     print("Start setup init")
-    #     source_syms = sspm.syms
-    #     source_syms_dims = sspm.syms.__len__()
-    #     source_syms_init_vals = (np.random.rand(source_syms_dims) * 2 - 1) * self.rand_init_max
-    #     subs = dict(zip(source_syms, source_syms_init_vals))
-    #     x0 = np.zeros(self.x_dims)
-    #     for i in range(self.x_dims):
-    #         sym = self.x_syms[i]
-    #         sym_def = sspm.new_params_raw_defines[sym]
-    #         v = sym_def.evalf(subs=subs)
-    #         x0[i] = v
-    #     return x0
-    
     def setup_initvals(self,sspm):
         x0 = np.zeros(self.x_dims)
         if self.lower_bnd:
@@ -282,9 +264,9 @@ class StateSpaceIdenSIMO(object):
             for k in range(self.lower_bnd.__len__()):
                 bnds.append((self.lower_bnd[k],self.upper_bnd[k]))
 
-            ret = minimize(f, x0,constraints=con,options=opts,bounds=bnds)
+            ret = minimize(f, x0, method='L-BFGS-B',constraints=con,options=opts,bounds=bnds)
         else:
-            ret = minimize(f, x0,constraints=con,options=opts)
+            ret = minimize(f, x0, method='L-BFGS-B',constraints=con,options=opts)
 
         x = ret.x.copy()
         J = ret.fun
@@ -413,6 +395,44 @@ class StateSpaceIdenSIMO(object):
             ax1.legend(lines, [l.get_label() for l in lines])
 
         plt.show()
+
+    def get_freq_res_data(self):
+        # Prepare the data structures to hold the arrays to be returned
+        data = {
+            "freq": self.freq,
+            "Hs_amp": [],
+            "Hs_pha": [],
+            "Hest_amp": [],
+            "Hest_pha": [],
+            "coherence": []
+        }
+
+        Hest = copy.deepcopy(self.Hs)
+        ssm = self.get_best_ssm()
+
+        # Calculate the estimated transfer function values
+        for omg_ptr in range(len(self.freq)):
+            u_index = 0
+            omg = self.freq[omg_ptr]
+            Tnum = ssm.calucate_transfer_matrix_at_omg(omg)
+            for y_index in range(self.y_dims):
+                h = Tnum[y_index, u_index]
+                h = complex(h)  # Replace np.complex with built-in complex
+                Hest[y_index][omg_ptr] = h
+
+        # Calculate amplitude and phase for each dimension
+        for y_index in range(self.y_dims):
+            amp0, pha0 = FreqIdenSIMO.get_amp_pha_from_h(self.Hs[y_index])
+            amp1, pha1 = FreqIdenSIMO.get_amp_pha_from_h(Hest[y_index])
+
+            data["Hs_amp"].append(amp0)
+            data["Hs_pha"].append(pha0)
+            data["Hest_amp"].append(amp1)
+            data["Hest_pha"].append(pha1)
+            data["coherence"].append(self.coherens[y_index])
+
+        return data
+
 
     def init_omg_list(self, omg_min, omg_max):
         if omg_min is None:
