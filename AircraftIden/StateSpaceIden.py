@@ -264,9 +264,9 @@ class StateSpaceIdenSIMO(object):
             for k in range(self.lower_bnd.__len__()):
                 bnds.append((self.lower_bnd[k],self.upper_bnd[k]))
 
-            ret = minimize(f, x0, method='L-BFGS-B',constraints=con,options=opts,bounds=bnds)
+            ret = minimize(f, x0, constraints=con,options=opts,bounds=bnds)
         else:
-            ret = minimize(f, x0, method='L-BFGS-B',constraints=con,options=opts)
+            ret = minimize(f, x0, constraints=con,options=opts)
 
         x = ret.x.copy()
         J = ret.fun
